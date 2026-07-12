@@ -1,6 +1,9 @@
 // ==UserScript==
-// @name         EvoWars.io Auto Chém v4
-// @match        ://evowars.io/
+// @name         Auto chém v2
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Bản sửa lỗi khoảng trắng ẩn và bổ sung Canvas vẽ vòng render + Tự động lấy hệ số Factor theo cấp
+// @match        *://evowars.io/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @run-at       document-end
@@ -9,113 +12,7 @@
 (function() {
     'use strict';
 
-    // ==========================================
-    // KHỞI TẠO ĐỊNH CẤU HÌNH & THÔNG SỐ ĐỒ HỌA NẾT MẢNH
-    // ==========================================
-    const config = {
-        isEnabled: false,
-        showMyRadius: true,
-        showEnemyRadius: true,
-        quickRespawn: false,
-        respawnSpeed: parseFloat(GM_getValue("evo_respawnSpeed")) || 30.0,
-        pingBuffer: parseFloat(GM_getValue("evo_pingBuffer")) || 1.01,
-        BORDER_OFF: "#ff0000",
-        BORDER_ON: "#00ff00",
-        COLLISION: "#FFD700",
-        HITBOX_COLOR: "#FF0000",       // Hitbox địch (Đỏ)
-        MY_HITBOX_COLOR: "#00ffff",    // Hitbox bản thân (Xanh Neon)
-        ENEMY_SWORD: "rgba(255, 0, 0, 0.25)",
-        WIDTH: 0.5                     // KHÓA CỨNG: Độ dày nét vẽ siêu mảnh 0.5
-    };
-
-    // Bảng dữ liệu chuẩn của từng Level: [Factor, Distance, Degrees]
-    const LEVEL_DATA = {
-        1: [1.06, 200, 125],
-        2: [1.27, 235, 90],
-        3: [1.25, 245, 125],
-        4: [1.20, 260, 125],
-        5: [1.27, 300, 133],
-        6: [1.27, 340, 125],
-        7: [1.39, 380, 131],
-        8: [1.43, 343, 130],
-        9: [1.43, 350, 125],
-        10: [1.41, 470, 133],
-        11: [1.55, 510, 129],
-        12: [1.47, 520, 133],
-        13: [1.49, 555, 134],
-        14: [1.53, 595, 125],
-        15: [1.60, 650, 129],
-        16: [1.51, 655, 131],
-        17: [1.53, 660, 125],
-        18: [1.57, 695, 125],
-        19: [1.53, 690, 125],
-        20: [1.55, 710, 130],
-        21: [1.57, 775, 130],
-        22: [1.63, 805, 136],
-        23: [1.59, 680, 122],
-        24: [1.65, 870, 125],
-        25: [1.68, 940, 137],
-        26: [1.65, 975, 130],
-        27: [1.81, 1050, 125],
-        28: [1.73, 1095, 125],
-        29: [1.61, 1000, 140],
-        30: [1.57, 995, 125],
-        31: [1.65, 1050, 130],
-        32: [1.73, 1145, 134],
-        33: [1.66, 1120, 139],
-        34: [1.65, 1125, 124],
-        35: [1.64, 1145, 135],
-        36: [1.77, 1250, 122],
-        37: [1.85, 1300, 125],
-        38: [2.03, 1300, 125],
-        39: [2.09, 1300, 125],
-        40: [2.09, 1300, 125],
-        41: [2.11, 1300, 125]
-    };
-
-    function getLevelConfig(lv) {
-        return LEVEL_DATA[lv] || LEVEL_DATA[41];
-    }
-
-    let liveHitboxScale = parseFloat(GM_getValue("myHitboxScale") || 0.85);
-    if (liveHitboxScale < 0.50) liveHitboxScale = 0.50; // Giới hạn sàn an toàn tối thiểu
-
-    let lastAttackTime = 0;
-    let rt, me, canvas, ctx;
-
-    let isFlicking = false;
-    let flickExpiryTime = 0;
-    let visualLockedAngle = 0;
-
-    const targetHistory = new Map();
-    let cachedPlayerTypes = [];
-    let aiMemory = {};
-
-    try {
-        let savedMemory = GM_getValue("ai_bot_memory");
-        if (savedMemory && typeof savedMemory === 'object') aiMemory = savedMemory;
-        else if (typeof savedMemory === 'string') aiMemory = JSON.parse(savedMemory);
-    } catch(e) { aiMemory = {}; }
-
-    function getDefaultFactor(lv) {
-        const config = getLevelConfig(lv);
-        return config[0]; // Trả về hệ số factor từ bảng
-    }
-
-    function getDefaultCooldown(lv) {
-        if (lv <= 5) return 200;
-        if (lv <= 15) return 240;
-        if (lv <= 25) return 300;
-        if (lv <= 35) return 360;
-        return 400;
-    }
-
-    // Tính độ dịch tâm tịnh tiến dựa trên thang đo động thực tế của vòng tròn chung
-    function getHitboxShift(width) {
-        let shiftFactor = liveHitboxScale - 0.71;
-        return (width / 2) * (shiftFactor * 0.5); // Giảm bớt tỷ lệ dịch để cân đối tâm khi tăng size chung lên 0.85
-    }
-
+    // Nhận diện cấp độ chính xác từ dữ liệu game
     function getTrueLevel(inst) {
         if (!inst) return 1;
         const vars = inst.instance_vars || inst.instvars;
@@ -133,237 +30,111 @@
         return ta !== 0 && ta !== undefined && ta === tb;
     }
 
-    function getLevelParams(lv) {
-        let levelKey = lv.toString();
-        if (!aiMemory[levelKey] || typeof aiMemory[levelKey] !== 'object' || isNaN(aiMemory[levelKey].degreesBuffer)) {
-            const config = getLevelConfig(lv);
-            let defaultBuffer = config[2]; // Lấy góc chém (degrees) chuẩn từ bảng
+    const config = {
+        isEnabled: false,
+        showMyRadius: true,
+        showEnemyRadius: true,
+        pingBuffer: 1.01,
+        BORDER_OFF: "#ff0000",
+        BORDER_ON: "#00ff00",
+        COLLISION: "#FFD700",
+        HITBOX_COLOR: "#FF0000",
+        ENEMY_SWORD: "rgba(255, 0, 0, 0.25)",
+        WIDTH: 1.5
+    };
 
-            aiMemory[levelKey] = {
-                degreesBuffer: defaultBuffer,
-                predictionTicks: 4.5,
-                missCount: 0,
-                cooldownMS: getDefaultCooldown(lv)
-            };
+    let liveHitboxScale = parseFloat(GM_getValue("myHitboxScale") || 0.92);
+    let lastAttackTime = 0;
+    let rt, me, canvas, ctx;
+
+    const targetHistory = new Map();
+    let cachedPlayerTypes = [];
+
+    // Danh sách hệ số Factor mặc định theo yêu cầu
+    function getDefaultFactor(lv) {
+        switch(lv) {
+            case 1: return 1.06;
+            case 2: return 1.27;
+            case 3: return 1.25;
+            case 4: return 1.20;
+            case 5: return 1.27;
+            case 6: return 1.27;
+            case 7: return 1.39;
+            case 8: return 1.43;
+            case 9: return 1.43;
+            case 10: return 1.41;
+            case 11: return 1.55;
+            case 12: return 1.47;
+            case 13: return 1.49;
+            case 14: return 1.53;
+            case 15: return 1.60;
+            case 16: return 1.51;
+            case 17: return 1.53;
+            case 18: return 1.57;
+            case 19: return 1.53;
+            case 20: return 1.55;
+            case 21: return 1.57;
+            case 22: return 1.63;
+            case 23: return 1.59;
+            case 24: return 1.65;
+            case 25: return 1.68;
+            case 26: return 1.65;
+            case 27: return 1.81;
+            case 28: return 1.73;
+            case 29: return 1.61;
+            case 30: return 1.57;
+            case 31: return 1.65;
+            case 32: return 1.73;
+            case 33: return 1.66;
+            case 34: return 1.65;
+            case 35: return 1.64;
+            case 36: return 1.77;
+            case 37: return 1.85;
+            case 38: return 2.03;
+            case 39: return 2.09;
+            case 40: return 2.09;
+            case 41: return 2.11;
+            default: return 1.15; // Dự phòng cho các cấp lớn hơn 41
         }
-        return aiMemory[levelKey];
     }
 
-    function getGameRadius(w, trueLv) {
+    // Tốc độ hồi chiêu động theo nhóm cấp độ
+    function getCooldownMS(lv) {
+        if (lv <= 5) return 220;
+        if (lv <= 15) return 260;
+        if (lv <= 25) return 320;
+        return 380;
+    }
+
+    // Góc bù tối ưu cố định theo phân khúc cấp độ
+    function getFixedAngleBuffer(lv) {
+        if ([27, 28].includes(lv)) return 122;
+        if ([30, 36].includes(lv)) return 126;
+        if (lv > 25) return 130;
+        return 135;
+    }
+
+    // Hàm lấy tầm kiếm dựa trên bộ nhớ (hoặc lấy mặc định từ danh sách)
+    function getRadius(w, scale, drawScale, trueLv) {
+        let savedFactors = GM_getValue("myFactors") || {};
         let levelKey = trueLv.toString();
-        let savedFactors = {};
-        try { savedFactors = GM_getValue("myFactors") || {}; } catch(e){}
-        let factor = parseFloat(savedFactors[levelKey]);
-        if (isNaN(factor)) factor = getDefaultFactor(trueLv);
-        return (w / 2) * 2.8 * factor;
+        let factor = parseFloat(savedFactors[levelKey] || getDefaultFactor(trueLv));
+        return (w / 2) * scale * 2.8 * factor * drawScale;
     }
 
-    function getPredictiveSwingAngle(trueLv, pInst, tInst, vX, vY, currentDist, myRadius, isOrbiting) {
-        const params = getLevelParams(trueLv);
-        let activeTicks = params.predictionTicks;
+    // Thuật toán dự đoán hướng chạy tuyến tính
+    function getPredictiveAngle(trueLv, pInst, tInst, vX, vY) {
+        let predictionTicks = 3.0;
 
-        if (isOrbiting) {
-            activeTicks = 0.6;
-        } else if (currentDist < myRadius * 0.70) {
-            activeTicks = 0.1;
-        }
-
-        let futureX = tInst.x + (vX * activeTicks);
-        let futureY = tInst.y + (vY * activeTicks);
+        let futureX = tInst.x + (vX * predictionTicks);
+        let futureY = tInst.y + (vY * predictionTicks);
 
         let dx = futureX - pInst.x;
         let dy = futureY - pInst.y;
-        return Math.atan2(dy, dx) + (params.degreesBuffer * Math.PI / 180);
-    }
+        let baseAngle = Math.atan2(dy, dx);
 
-    function hackRuntimeRender(runtime) {
-        if (!runtime || runtime.DrawInstance_Hooked) return;
-        runtime.DrawInstance_Hooked = true;
-        const originalDraw = runtime.draw_instance || runtime.DrawInstance;
-        if (typeof originalDraw === 'function') {
-            const hookFunction = function(inst) {
-                if (me && inst && inst.uid === me.uid && isFlicking && Date.now() < flickExpiryTime) {
-                    inst.angle = visualLockedAngle;
-                    if (inst.instvars) inst.instvars[2] = visualLockedAngle;
-                }
-                return originalDraw.apply(this, arguments);
-            };
-            if (runtime.draw_instance) runtime.draw_instance = hookFunction;
-            else if (runtime.DrawInstance) runtime.DrawInstance = hookFunction;
-        }
-    }
-
-    function performPerfectChop(runtime, targetInst, trueLv, vX, vY, currentDist, myRadius, isOrbiting) {
-        let now = Date.now();
-        const params = getLevelParams(trueLv);
-        if (now - lastAttackTime < params.cooldownMS) return;
-        if (me.instvars && (me.instvars[4] === 1 || me.instvars[6] === 1)) return;
-
-        lastAttackTime = now;
-
-        visualLockedAngle = me.instvars ? me.instvars[2] : me.angle;
-        isFlicking = true;
-        flickExpiryTime = Date.now() + 120;
-
-        let myShift = getHitboxShift(me.width);
-        let myCenterX = me.x + Math.cos(me.angle) * myShift;
-        let myCenterY = me.y + Math.sin(me.angle) * myShift;
-
-        let paramsInst = { x: myCenterX, y: myCenterY };
-        const angle = getPredictiveSwingAngle(trueLv, paramsInst, targetInst, vX, vY, currentDist, myRadius, isOrbiting);
-
-        const screenCenterX = window.innerWidth / 2;
-        const screenCenterY = window.innerHeight / 2;
-        const fakeMouseX = screenCenterX + Math.cos(angle) * 250;
-        const fakeMouseY = screenCenterY + Math.sin(angle) * 250;
-
-        const oldMouseX = runtime.mouseX; const oldMouseY = runtime.mouseY;
-        const oldMousex = runtime.mousex; const oldMousey = runtime.mousey;
-
-        runtime.mouseX = fakeMouseX; runtime.mouseY = fakeMouseY;
-        runtime.mousex = fakeMouseX; runtime.mousey = fakeMouseY;
-
-        if (runtime.types_by_index) {
-            runtime.types_by_index.forEach(t => {
-                t.instances?.forEach(inst => {
-                    if (typeof inst.mouseX !== 'undefined') inst.mouseX = fakeMouseX;
-                    if (typeof inst.mouseY !== 'undefined') inst.mouseY = fakeMouseY;
-                });
-            });
-        }
-
-        me.angle = angle;
-        if (me.instvars) {
-            me.instvars[2] = visualLockedAngle;
-            me.instvars[3] = angle;
-            me.instvars[4] = 1;
-        }
-
-        const gameCanvas = runtime.canvas || document.getElementById('canvas') || document.body;
-        const eventOptions = { clientX: fakeMouseX, clientY: fakeMouseY, bubbles: true, button: 0, buttons: 1 };
-
-        gameCanvas.dispatchEvent(new PointerEvent('pointerdown', eventOptions));
-        gameCanvas.dispatchEvent(new MouseEvent('mousedown', eventOptions));
-        gameCanvas.dispatchEvent(new PointerEvent('pointerup', eventOptions));
-        gameCanvas.dispatchEvent(new MouseEvent('mouseup', eventOptions));
-
-        runtime.mouseX = oldMouseX; runtime.mouseY = oldMouseY;
-        runtime.mousex = oldMousex; runtime.mousey = oldMousey;
-    }
-
-    function hookEngineTick() {
-        if (!rt || rt.BotHooked) return;
-        rt.BotHooked = true;
-
-        const originalTick = rt.tick || rt.Tick;
-        const newTick = function() {
-            try { botLogicLoop(this); } catch(e) {}
-            return originalTick.apply(this, arguments);
-        };
-
-        if (rt.tick) rt.tick = newTick;
-        else if (rt.Tick) rt.Tick = newTick;
-    }
-
-    function botLogicLoop(runtime) {
-        if (cachedPlayerTypes.length === 0 && runtime.types_by_index) {
-            cachedPlayerTypes = runtime.types_by_index.filter(t => t.instvar_sids?.length > 40);
-        }
-        if (cachedPlayerTypes.length === 0) return;
-
-        me = null;
-        for (let t of cachedPlayerTypes) {
-            if (t.instances) {
-                let found = t.instances.find(i => Math.abs(i.x - runtime.running_layout.scrollX) < 1.5 && Math.abs(i.y - runtime.running_layout.scrollY) < 1.5);
-                if (found) { me = found; break; }
-            }
-        }
-
-        if (config.quickRespawn && !me) runtime.timescale = config.respawnSpeed;
-        else if (runtime.timescale !== 1) runtime.timescale = 1;
-
-        if (!me) return;
-
-        let myTrueLevel = getTrueLevel(me);
-        let pParams = getLevelParams(myTrueLevel);
-
-        if (isFlicking) {
-            const now = Date.now();
-            const isStillSwinging = me.instvars && (me.instvars[4] === 1 || me.instvars[6] === 1);
-            if (isStillSwinging && now >= flickExpiryTime) flickExpiryTime = now + 16;
-            if (now < flickExpiryTime) {
-                me.angle = visualLockedAngle;
-                if (me.instvars) me.instvars[2] = visualLockedAngle;
-            } else {
-                isFlicking = false;
-            }
-        }
-
-        const isWeaponReady = (Date.now() - lastAttackTime >= pParams.cooldownMS);
-        const myRadiusGame = getGameRadius(me.width, myTrueLevel);
-
-        let myShift = getHitboxShift(me.width);
-        let myCenterX = me.x + Math.cos(me.angle) * myShift;
-        let myCenterY = me.y + Math.sin(me.angle) * myShift;
-
-        let targetData = null;
-        const currentUids = new Set();
-        let closestCalculatedDist = Infinity;
-        let isTargetOrbiting = false;
-        let finalTargetInstance = null;
-
-        cachedPlayerTypes.forEach(t => {
-            t.instances?.forEach(obj => {
-                if (obj.uid === me.uid || obj.width <= 30 || isTeammate(me, obj)) return;
-
-                let objShift = getHitboxShift(obj.width);
-                let objCenterX = obj.x + Math.cos(obj.angle) * objShift;
-                let objCenterY = obj.y + Math.sin(obj.angle) * objShift;
-
-                let distGame = Math.hypot(objCenterX - myCenterX, objCenterY - myCenterY);
-                if (obj.instvars && (obj.instvars[4] === 1 || obj.instvars[6] === 1)) return;
-
-                currentUids.add(obj.uid);
-
-                if (!targetHistory.has(obj.uid)) targetHistory.set(obj.uid, []);
-                let history = targetHistory.get(obj.uid);
-                history.push({ x: obj.x, y: obj.y, angle: obj.angle, t: Date.now() });
-                if (history.length > 5) history.shift();
-
-                let vX = 0, vY = 0; let orbitDetect = false;
-                if (history.length > 1) {
-                    let first = history[0]; let last = history[history.length - 1];
-                    let dt = (last.t - first.t) / 16.66;
-                    if (dt > 0) { vX = (last.x - first.x) / dt; vY = (last.y - first.y) / dt; }
-
-                    let angleChangeSum = 0;
-                    for (let i = 1; i < history.length; i++) {
-                        let diff = Math.abs(history[i].angle - history[i-1].angle);
-                        if (diff > Math.PI) diff = 2 * Math.PI - diff;
-                        angleChangeSum += diff;
-                    }
-                    if (angleChangeSum > 0.5) orbitDetect = true;
-                }
-
-                const enemyHitboxRadiusGame = (obj.width / 2) * liveHitboxScale;
-                const fastActivationDistanceGame = (myRadiusGame + enemyHitboxRadiusGame) * config.pingBuffer;
-
-                if (distGame <= fastActivationDistanceGame && distGame < closestCalculatedDist) {
-                    closestCalculatedDist = distGame;
-                    targetData = { uid: obj.uid, vX: vX, vY: vY, dist: distGame };
-                    isTargetOrbiting = orbitDetect;
-                    finalTargetInstance = obj;
-                }
-            });
-        });
-
-        for (let key of targetHistory.keys()) {
-            if (!currentUids.has(key)) targetHistory.delete(key);
-        }
-
-        if (targetData && config.isEnabled && isWeaponReady && finalTargetInstance) {
-            performPerfectChop(runtime, finalTargetInstance, myTrueLevel, targetData.vX, targetData.vY, targetData.dist, myRadiusGame, isTargetOrbiting);
-        }
+        let angleBuffer = getFixedAngleBuffer(trueLv);
+        return baseAngle + (angleBuffer * Math.PI / 180);
     }
 
     function gameToScreen(x, y, layer) {
@@ -377,12 +148,81 @@
         };
     }
 
-    // ==========================================
-    // KHÔNG GIAN RENDER CANVAS CHUẨN MẢNH 0.5
-    // ==========================================
-    function drawVisuals() {
-        requestAnimationFrame(drawVisuals);
-        if (!me || !rt) return;
+    function performSlash(target, player, trueLv, vX, vY) {
+        let now = Date.now();
+        let cooldown = getCooldownMS(trueLv);
+        if (now - lastAttackTime < cooldown) return;
+        if (player.instvars && (player.instvars[4] === 1 || player.instvars[6] === 1)) return;
+        if (target.instvars && (target.instvars[4] === 1 || target.instvars[6] === 1)) return;
+
+        lastAttackTime = now;
+
+        const angle = getPredictiveAngle(trueLv, player, target, vX, vY);
+
+        const fx = (window.innerWidth/2 + Math.cos(angle) * 180) | 0;
+        const fy = (window.innerHeight/2 + Math.sin(angle) * 180) | 0;
+        const snap = {clientX: fx, clientY: fy, bubbles: true, button: 0};
+
+        player.angle = angle;
+        if (player.instvars) {
+            player.instvars[2] = angle;
+            player.instvars[3] = angle;
+            player.instvars[4] = 1;
+        }
+
+        document.dispatchEvent(new MouseEvent('mousedown', snap));
+        document.dispatchEvent(new MouseEvent('mouseup', snap));
+    }
+
+    // Hệ thống phím tắt điều chỉnh bộ nhớ dữ liệu U, Q, E, P, O, C, V
+    window.addEventListener('keydown', (e) => {
+        let key = e.key.toLowerCase();
+        if (key === 'u') config.isEnabled = !config.isEnabled;
+        if (key === 'q') config.showMyRadius = !config.showMyRadius;
+        if (key === 'e') config.showEnemyRadius = !config.showEnemyRadius;
+
+        // Tăng giảm cự ly tầm kiếm theo cấp độ hiện tại
+        if (['p', 'o'].includes(key)) {
+            let lv = me ? getTrueLevel(me) : 1;
+            let levelKey = lv.toString();
+            let savedFactors = GM_getValue("myFactors") || {};
+            let currentFactor = parseFloat(savedFactors[levelKey] || getDefaultFactor(lv));
+            savedFactors[levelKey] = (currentFactor + (key === 'p' ? 0.03 : -0.01)).toFixed(2);
+            GM_setValue("myFactors", savedFactors);
+        }
+
+        // Tăng giảm tỷ lệ chính xác của vòng Hitbox địch
+        if (['c', 'v'].includes(key)) {
+            liveHitboxScale += (key === 'c' ? 0.02 : -0.02);
+            GM_setValue("myHitboxScale", liveHitboxScale.toFixed(2));
+        }
+    });
+
+    function update() {
+        requestAnimationFrame(update);
+        rt = typeof cr_getC2Runtime !== 'undefined' ? cr_getC2Runtime() : null;
+        if (!rt?.running_layout) return;
+
+        if (cachedPlayerTypes.length === 0 && rt.types_by_index) {
+            cachedPlayerTypes = rt.types_by_index.filter(t => t.instvar_sids?.length > 40);
+        }
+        if (cachedPlayerTypes.length === 0) return;
+
+        me = null;
+        for (let t of cachedPlayerTypes) {
+            if (t.instances) {
+                let found = t.instances.find(i => Math.abs(i.x - rt.running_layout.scrollX) < 1.5 && Math.abs(i.y - rt.running_layout.scrollY) < 1.5);
+                if (found) { me = found; break; }
+            }
+        }
+
+        if (!me) return;
+
+        let myTrueLevel = getTrueLevel(me);
+        let currentCooldown = getCooldownMS(myTrueLevel);
+        const isWeaponReady = (Date.now() - lastAttackTime >= currentCooldown);
+
+        if (!canvas) return; // Bảo vệ nếu chưa có canvas
 
         if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
             canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -392,149 +232,92 @@
         const scale = me.layer ? me.layer.getScale() : 1;
         let drawScale = rt.canvas ? (rt.canvas.clientWidth / rt.canvas.width || 1) : 1;
 
-        let myTrueLevel = getTrueLevel(me);
-        let pParams = getLevelParams(myTrueLevel);
-        const myRadiusGame = getGameRadius(me.width, myTrueLevel);
-        const myRadiusScreen = myRadiusGame * scale * drawScale;
+        const myRadius = getRadius(me.width, scale, drawScale, myTrueLevel);
+        const myScreenPos = gameToScreen(me.x, me.y, me.layer);
 
-        let myShift = getHitboxShift(me.width);
-        let myCenterX = me.x + Math.cos(me.angle) * myShift;
-        let myCenterY = me.y + Math.sin(me.angle) * myShift;
-
-        const myHitboxRadiusScreen = (me.width / 2) * scale * liveHitboxScale * drawScale;
-        const myScreenPos = gameToScreen(myCenterX, myCenterY, me.layer);
-
-        const isWeaponReady = (Date.now() - lastAttackTime >= pParams.cooldownMS);
+        let bestTarget = null;
+        const currentUids = new Set();
+        let closestDist = Infinity;
+        let targetVelocity = { x: 0, y: 0 };
 
         cachedPlayerTypes.forEach(t => {
             t.instances?.forEach(obj => {
                 if (obj.uid === me.uid || obj.width <= 30 || isTeammate(me, obj)) return;
+                if (obj.instvars && (obj.instvars[4] === 1 || obj.instvars[6] === 1)) return;
 
-                let objShift = getHitboxShift(obj.width);
-                let objCenterX = obj.x + Math.cos(obj.angle) * objShift;
-                let objCenterY = obj.y + Math.sin(obj.angle) * objShift;
+                currentUids.add(obj.uid);
 
-                const enemyHitboxRadiusScreen = (obj.width / 2) * scale * liveHitboxScale * drawScale;
-                const enemyScreenPos = gameToScreen(objCenterX, objCenterY, obj.layer || me.layer);
+                if (!targetHistory.has(obj.uid)) targetHistory.set(obj.uid, []);
+                let history = targetHistory.get(obj.uid);
+                history.push({ x: obj.x, y: obj.y, t: Date.now() });
+                if (history.length > 4) history.shift();
+
+                const enemyTrueLv = getTrueLevel(obj);
+                const enemyHitboxRadius = (obj.width / 2) * scale * liveHitboxScale * drawScale;
+
+                const enemyScreenPos = gameToScreen(obj.x, obj.y, obj.layer || me.layer);
+                const currentDist = Math.hypot(enemyScreenPos.x - myScreenPos.x, enemyScreenPos.y - myScreenPos.y);
+
+                let vX = 0, vY = 0;
+                if (history.length > 1) {
+                    let first = history[0]; let last = history[history.length - 1];
+                    let dt = (last.t - first.t) / 16.66;
+                    if (dt > 0) { vX = (last.x - first.x) / dt; vY = (last.y - first.y) / dt; }
+                }
+
+                const activationDistance = (myRadius + enemyHitboxRadius) * config.pingBuffer;
+
+                if (currentDist <= activationDistance && currentDist < closestDist) {
+                    closestDist = currentDist;
+                    bestTarget = obj;
+                    targetVelocity = { x: vX, y: vY };
+                }
 
                 if (config.showEnemyRadius && !isNaN(enemyScreenPos.x)) {
-                    const enemySwordRadiusGame = getGameRadius(obj.width, getTrueLevel(obj));
-                    const enemySwordRadiusScreen = enemySwordRadiusGame * scale * drawScale;
-
+                    const enemySwordRadius = getRadius(obj.width, scale, drawScale, enemyTrueLv);
                     ctx.lineWidth = config.WIDTH;
-
-                    ctx.beginPath(); ctx.arc(enemyScreenPos.x, enemyScreenPos.y, enemySwordRadiusScreen, 0, Math.PI * 2); ctx.strokeStyle = config.ENEMY_SWORD; ctx.stroke();
-
-                    // Vòng Hitbox địch
-                    ctx.beginPath(); ctx.arc(enemyScreenPos.x, enemyScreenPos.y, enemyHitboxRadiusScreen, 0, Math.PI * 2); ctx.strokeStyle = config.HITBOX_COLOR; ctx.stroke();
+                    ctx.beginPath(); ctx.arc(enemyScreenPos.x, enemyScreenPos.y, enemySwordRadius, 0, Math.PI * 2); ctx.strokeStyle = config.ENEMY_SWORD; ctx.stroke();
+                    ctx.beginPath(); ctx.arc(enemyScreenPos.x, enemyScreenPos.y, enemyHitboxRadius, 0, Math.PI * 2); ctx.strokeStyle = config.HITBOX_COLOR; ctx.stroke();
                 }
             });
         });
 
-        if (config.showMyRadius && !isNaN(myScreenPos.x)) {
-            ctx.lineWidth = config.WIDTH;
+        for (let key of targetHistory.keys()) {
+            if (!currentUids.has(key)) targetHistory.delete(key);
+        }
 
-            const myRealScreenPos = gameToScreen(me.x, me.y, me.layer);
-            ctx.beginPath(); ctx.arc(myRealScreenPos.x, myRealScreenPos.y, myRadiusScreen, 0, Math.PI * 2); ctx.setLineDash([12, 8]);
-            ctx.strokeStyle = !config.isEnabled ? config.BORDER_OFF : (!isWeaponReady ? config.BORDER_ON : config.COLLISION);
+        if (bestTarget && config.isEnabled && isWeaponReady) {
+            performSlash(bestTarget, me, myTrueLevel, targetVelocity.x, targetVelocity.y);
+        }
+
+        if (config.showMyRadius && !isNaN(myScreenPos.x)) {
+            let savedFactors = GM_getValue("myFactors") || {};
+            let currentFactor = parseFloat(savedFactors[myTrueLevel.toString()] || getDefaultFactor(myTrueLevel));
+
+            ctx.lineWidth = config.WIDTH;
+            ctx.beginPath(); ctx.arc(myScreenPos.x, myScreenPos.y, myRadius, 0, Math.PI * 2); ctx.setLineDash([8, 6]);
+            ctx.strokeStyle = !config.isEnabled ? config.BORDER_OFF : (!isWeaponReady ? config.BORDER_ON : (bestTarget ? config.COLLISION : config.BORDER_ON));
             ctx.stroke(); ctx.setLineDash([]);
 
-            // Vòng Xanh Neon: Mặc định gốc ban đầu 0.85
-            ctx.beginPath(); ctx.arc(myScreenPos.x, myScreenPos.y, myHitboxRadiusScreen, 0, Math.PI * 2);
-            ctx.strokeStyle = config.MY_HITBOX_COLOR;
-            ctx.stroke();
-
-            ctx.fillStyle = "#ffffff"; ctx.font = "bold 13px Arial"; ctx.shadowBlur = 4; ctx.shadowColor = "black";
-            ctx.fillText([Ai Cấp ${myTrueLevel}] Góc (Phím 1/2): ${pParams.degreesBuffer.toFixed(1)}° | Đón Ticks: ${pParams.predictionTicks.toFixed(2)}, 30, window.innerHeight - 70);
-            ctx.fillText([Thủ công] Tầm chém (P/O): ${myRadiusGame.toFixed(1)} | Hệ số Hitbox Gốc (C/V): ${liveHitboxScale.toFixed(2)}, 30, window.innerHeight - 50);
-            ctx.fillText([Hệ thống] Hồi sinh nhanh (T): ${config.quickRespawn ? "BẬT" : "TẮT"} (${config.respawnSpeed}x) | Bù Ping: ${config.pingBuffer.toFixed(2)}x, 30, window.innerHeight - 30);
+            ctx.fillStyle = "#ffffff"; ctx.font = "bold 12px Arial"; ctx.shadowBlur = 3; ctx.shadowColor = "black";
+            ctx.fillText(`[Auto Chém] U: Bật/Tắt (${config.isEnabled ? "BẬT" : "TẮT"}) | Q/E: Ẩn hiện vòng`, 30, window.innerHeight - 70);
+            ctx.fillText(`[Cấp: ${myTrueLevel}] Hệ số tầm đánh (P/O): ${currentFactor.toFixed(2)}`, 30, window.innerHeight - 50);
+            ctx.fillText(`Tỷ lệ Hitbox địch (C/V): ${parseFloat(liveHitboxScale).toFixed(2)}`, 30, window.innerHeight - 30);
             ctx.shadowBlur = 0;
         }
     }
 
-    function showToast(text) {
-        let toast = document.getElementById("evo-toast");
-        if (!toast) {
-            toast = document.createElement("div");
-            toast.id = "evo-toast";
-            toast.style.cssText = "position:fixed; top:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.85); color:#0f0; padding:10px 20px; font-family:sans-serif; font-size:13px; font-weight:bold; border-radius:5px; z-index:9999999; pointer-events:none; transition: opacity 0.2s;";
-            document.body.appendChild(toast);
-        }
-        toast.innerText = text;
-        toast.style.opacity = "1";
-        clearTimeout(toast.hideTimeout);
-        toast.hideTimeout = setTimeout(() => { toast.style.opacity = "0"; }, 1500);
-    }
+    // Bộ khởi tạo lớp phủ vẽ đè (Canvas Setup) tránh lỗi không hiển thị
+    setTimeout(() => {
+        canvas = document.createElement('canvas');
+        canvas.style.position = 'fixed';
+        canvas.style.top = '0';
+        canvas.style.left = '0';
+        canvas.style.pointerEvents = 'none'; // Không cản trở click chuột vào game
+        canvas.style.zIndex = '99999';       // Luôn nổi lên trên cùng
+        document.body.appendChild(canvas);
+        ctx = canvas.getContext('2d');
 
-    window.addEventListener('keydown', (e) => {
-        let key = e.key.toLowerCase();
-        let trueLv = me ? getTrueLevel(me) : 1;
-        let levelKey = trueLv.toString();
-
-        if (key === 'u') { config.isEnabled = !config.isEnabled; showToast("Bot Auto Chém: " + (config.isEnabled ? "BẬT (ON)" : "TẮT (OFF)")); }
-        if (key === 'q') { config.showMyRadius = !config.showMyRadius; showToast("Vòng chém bản thân: " + (config.showMyRadius ? "HIỆN" : "ẨN")); }
-        if (key === 'e') { config.showEnemyRadius = !config.showEnemyRadius; showToast("Vòng tầm đánh địch: " + (config.showEnemyRadius ? "HIỆN" : "ẨN")); }
-        if (key === 't') { config.quickRespawn = !config.quickRespawn; showToast("Hồi sinh nhanh: " + (config.quickRespawn ? "BẬT" : "TẮT")); }
-        if (['g', 'b'].includes(key)) {
-            config.respawnSpeed += (key === 'g' ? 5.0 : -5.0);
-            config.respawnSpeed = Math.max(1.0, Math.min(100.0, config.respawnSpeed));
-            GM_setValue("evo_respawnSpeed", config.respawnSpeed);
-            showToast(Tốc độ Hồi sinh: ${config.respawnSpeed}x);
-        }
-        if (key === '[' || key === ']') {
-            config.pingBuffer += (key === ']' ? 0.01 : -0.01);
-            config.pingBuffer = Math.max(1.00, Math.min(1.20, config.pingBuffer));
-            GM_setValue("evo_pingBuffer", config.pingBuffer);
-            showToast(Hệ số Bù Ping: ${config.pingBuffer.toFixed(2)}x);
-        }
-        if (key === '1' || key === '2') {
-            let p = getLevelParams(trueLv);
-            p.degreesBuffer += (key === '1' ? 1.0 : -1.0);
-            p.degreesBuffer = Math.max(45, Math.min(180, p.degreesBuffer)); // Đã nới rộng giới hạn min max góc
-            GM_setValue("ai_bot_memory", aiMemory);
-            showToast([Cấp ${trueLv}] Góc bù chém: ${p.degreesBuffer.toFixed(1)}°);
-        }
-        if (['p', 'o'].includes(key)) {
-            let savedFactors = {};
-            try { savedFactors = GM_getValue("myFactors") || {}; } catch(e){}
-            let currentFactor = parseFloat(savedFactors[levelKey]);
-            if (isNaN(currentFactor)) currentFactor = getDefaultFactor(trueLv);
-
-            currentFactor = (currentFactor + (key === 'p' ? 0.02 : -0.02));
-            savedFactors[levelKey] = currentFactor.toFixed(3);
-            GM_setValue("myFactors", savedFactors);
-            showToast([Cấp ${trueLv}] Tầm chém (Radius): ${currentFactor.toFixed(2)});
-        }
-        if (['c', 'v'].includes(key)) {
-            liveHitboxScale += (key === 'c' ? 0.01 : -0.01);
-            if (liveHitboxScale < 0.50) liveHitboxScale = 0.50;
-            GM_setValue("myHitboxScale", liveHitboxScale.toFixed(2));
-            showToast([Hệ thống] Thay đổi Hitbox Chung: ${liveHitboxScale.toFixed(2)});
-        }
-        if (['m', 'n'].includes(key)) {
-            let p = getLevelParams(trueLv);
-            p.cooldownMS += (key === 'm' ? 10 : -10);
-            p.cooldownMS = Math.max(100, Math.min(1000, p.cooldownMS));
-            GM_setValue("ai_bot_memory", aiMemory);
-            showToast([Cấp ${trueLv}] Hồi kiếm: ${p.cooldownMS}ms);
-        }
-        if (key === 'l') { aiMemory = {}; GM_setValue("ai_bot_memory", {}); GM_setValue("myFactors", {}); showToast("Đã Dọn Sạch Bộ Nhớ!"); }
-    });
-
-    function init() {
-        rt = typeof cr_getC2Runtime !== 'undefined' ? cr_getC2Runtime() : null;
-        if (rt?.running_layout) {
-            hookEngineTick();
-            hackRuntimeRender(rt);
-            drawVisuals();
-        } else {
-            setTimeout(init, 200);
-        }
-    }
-
-    canvas = document.createElement('canvas'); ctx = canvas.getContext('2d');
-    canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999999;';
-    document.body.appendChild(canvas);
-
-    setTimeout(init, 1000);
+        update();
+    }, 1000);
 })();
