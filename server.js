@@ -8,30 +8,13 @@ const session = require('express-session');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Cấu hình CORS an toàn
-const allowedOrigins = [
-    'https://evokey-server.onrender.com',
-    'http://localhost:3000',
-    'https://evokey-server.up.railway.app' // nếu có
-];
-
 app.use(cors({
-    origin: function (origin, callback) {
-        // Cho phép request không có origin (ví dụ từ Postman)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
+    origin: true,
     credentials: true
 }));
-
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// Cấu hình Session cho production
 app.use(session({
     secret: 'evokey_secret_2024',
     resave: false,
@@ -43,15 +26,11 @@ app.use(session({
     }
 }));
 
-// Đường dẫn database
 const DB_FILE = path.join(__dirname, 'data', 'db.json');
-
-// Tạo thư mục data nếu chưa có
 if (!fs.existsSync(path.join(__dirname, 'data'))) {
     fs.mkdirSync(path.join(__dirname, 'data'));
 }
 
-// Hàm đọc/ghi database
 function readDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
@@ -68,7 +47,6 @@ function readDB() {
                 balance: 0,
                 keys: [],
                 isAdmin: true,
-                active: true,
                 created: new Date().toISOString()
             }
         },
@@ -80,17 +58,13 @@ function writeDB(data) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// ===================== API ROUTES =====================
-
+// ========== AUTH ==========
 app.post('/api/auth', (req, res) => {
     const { username, password } = req.body;
     const db = readDB();
-
     if (!username || !password) {
         return res.json({ success: false, message: 'Vui lòng điền đầy đủ thông tin.' });
     }
-
-    // Admin
     if (username === 'lichcuto' && password === 'tinkm2009') {
         req.session.user = { username: 'lichcuto', isAdmin: true };
         req.session.save();
@@ -99,7 +73,6 @@ app.post('/api/auth', (req, res) => {
             user: { username: 'lichcuto', isAdmin: true, balance: 0, keys: [] }
         });
     }
-
     const user = db.users[username];
     if (!user) {
         return res.json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu.' });
@@ -107,7 +80,6 @@ app.post('/api/auth', (req, res) => {
     if (user.password !== password) {
         return res.json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu.' });
     }
-
     req.session.user = { username: username, isAdmin: false };
     req.session.save();
     res.json({
@@ -125,14 +97,12 @@ app.get('/api/session', (req, res) => {
     if (req.session.user) {
         const { username, isAdmin } = req.session.user;
         const db = readDB();
-
         if (username === 'lichcuto') {
             return res.json({
                 success: true,
                 user: { username: 'lichcuto', isAdmin: true, balance: 0, keys: [] }
             });
         }
-
         const user = db.users[username];
         if (user) {
             return res.json({
@@ -145,7 +115,6 @@ app.get('/api/session', (req, res) => {
                 }
             });
         }
-
         req.session.destroy();
         return res.json({ success: false, message: 'Session expired' });
     }
@@ -160,7 +129,6 @@ app.post('/api/logout', (req, res) => {
 app.post('/api/register', (req, res) => {
     const { username, password, email } = req.body;
     const db = readDB();
-
     if (!username || !password || !email) {
         return res.json({ success: false, message: 'Vui lòng điền đầy đủ thông tin.' });
     }
@@ -173,20 +141,19 @@ app.post('/api/register', (req, res) => {
     if (password.length < 4) {
         return res.json({ success: false, message: 'Mật khẩu phải có ít nhất 4 ký tự.' });
     }
-
     db.users[username] = {
         password: password,
         email: email,
         balance: 0,
         keys: [],
         isAdmin: false,
-        active: true,
         created: new Date().toISOString()
     };
     writeDB(db);
     res.json({ success: true, message: 'Đăng ký thành công! Hãy đăng nhập.' });
 });
 
+// ========== ADMIN ==========
 app.get('/api/admin/users', (req, res) => {
     const db = readDB();
     const users = Object.keys(db.users)
@@ -200,39 +167,32 @@ app.post('/api/admin/create-key', (req, res) => {
     if (adminUser !== 'lichcuto') {
         return res.json({ success: false, message: 'Không có quyền.' });
     }
-
     const db = readDB();
     if (!targetUser) {
         return res.json({ success: false, message: 'Vui lòng nhập tên user.' });
     }
-
     const user = db.users[targetUser];
     if (!user) {
         return res.json({ success: false, message: 'User không tồn tại.' });
     }
-
     const PKGS = {
         daily: { name: 'Daily', days: 1 },
         weekly: { name: 'Weekly', days: 7 },
         monthly: { name: 'Monthly', days: 30 },
         yearly: { name: 'Yearly', days: 365 }
     };
-
     const pkgInfo = PKGS[pkg];
     if (!pkgInfo) {
         return res.json({ success: false, message: 'Gói không hợp lệ.' });
     }
-
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let key = '';
     for (let i = 0; i < 16; i++) {
         key += chars.charAt(Math.floor(Math.random() * chars.length));
         if (i === 3 || i === 7 || i === 11) key += '-';
     }
-
     const now = Date.now();
     const expiry = new Date(now + pkgInfo.days * 86400000);
-
     if (!user.keys) user.keys = [];
     user.keys.push({
         key: key,
@@ -241,9 +201,7 @@ app.post('/api/admin/create-key', (req, res) => {
         pkg: pkg,
         status: 'active'
     });
-
     db.users[targetUser] = user;
-
     db.transactions.all.push({
         user: targetUser,
         type: 'admin_create',
@@ -252,7 +210,6 @@ app.post('/api/admin/create-key', (req, res) => {
         time: new Date().toISOString(),
         admin: 'lichcuto'
     });
-
     writeDB(db);
     res.json({
         success: true,
@@ -266,24 +223,19 @@ app.post('/api/purchase', (req, res) => {
     const { username, pkg } = req.body;
     const db = readDB();
     const user = db.users[username];
-
     if (!user) {
         return res.json({ success: false, message: 'User không tồn tại.' });
     }
-
     const PKGS = {
         daily: { name: 'Daily', price: 2500, days: 1 },
         weekly: { name: 'Weekly', price: 12000, days: 7 },
         monthly: { name: 'Monthly', price: 50000, days: 30 },
         yearly: { name: 'Yearly', price: 150000, days: 365 }
     };
-
     const pkgInfo = PKGS[pkg];
     if (!pkgInfo) {
         return res.json({ success: false, message: 'Gói không hợp lệ.' });
     }
-
-    // Admin: mua free nếu không đủ tiền
     if (username === 'lichcuto') {
         if (user.balance >= pkgInfo.price) {
             user.balance -= pkgInfo.price;
@@ -294,17 +246,14 @@ app.post('/api/purchase', (req, res) => {
         }
         user.balance -= pkgInfo.price;
     }
-
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let key = '';
     for (let i = 0; i < 16; i++) {
         key += chars.charAt(Math.floor(Math.random() * chars.length));
         if (i === 3 || i === 7 || i === 11) key += '-';
     }
-
     const now = Date.now();
     const expiry = new Date(now + pkgInfo.days * 86400000);
-
     if (!user.keys) user.keys = [];
     user.keys.push({
         key: key,
@@ -313,9 +262,7 @@ app.post('/api/purchase', (req, res) => {
         pkg: pkg,
         status: 'active'
     });
-
     db.users[username] = user;
-
     db.transactions.all.push({
         user: username,
         type: 'purchase',
@@ -324,7 +271,6 @@ app.post('/api/purchase', (req, res) => {
         key: key,
         time: new Date().toISOString()
     });
-
     writeDB(db);
     res.json({
         success: true,
@@ -339,11 +285,9 @@ app.post('/api/deposit', (req, res) => {
     const { username, method, amount, serial, pin } = req.body;
     const db = readDB();
     const user = db.users[username];
-
     if (!user) {
         return res.json({ success: false, message: 'User không tồn tại.' });
     }
-
     if (method === 'card') {
         if (!serial || !pin || serial.length < 10 || pin.length < 6) {
             return res.json({ success: false, message: 'Thẻ không hợp lệ. Vui lòng kiểm tra lại.' });
@@ -352,12 +296,9 @@ app.post('/api/deposit', (req, res) => {
             return res.json({ success: false, message: 'Thẻ đã được sử dụng hoặc không hợp lệ.' });
         }
     }
-
-    // Admin nạp tự động cộng luôn
     if (username === 'lichcuto') {
         user.balance = (user.balance || 0) + amount;
         db.users[username] = user;
-
         db.transactions.all.push({
             user: username,
             type: 'deposit',
@@ -366,7 +307,6 @@ app.post('/api/deposit', (req, res) => {
             time: new Date().toISOString(),
             status: 'approved'
         });
-
         writeDB(db);
         return res.json({
             success: true,
@@ -374,7 +314,6 @@ app.post('/api/deposit', (req, res) => {
             balance: user.balance
         });
     }
-
     const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
     db.transactions.pending.push({
         id: id,
@@ -387,7 +326,6 @@ app.post('/api/deposit', (req, res) => {
         serial: serial || '',
         pin: pin || ''
     });
-
     writeDB(db);
     res.json({
         success: true,
@@ -397,28 +335,21 @@ app.post('/api/deposit', (req, res) => {
 
 app.post('/api/admin/approve-deposit', (req, res) => {
     const { adminUser, depositId } = req.body;
-
     if (adminUser !== 'lichcuto') {
         return res.json({ success: false, message: 'Không có quyền.' });
     }
-
     const db = readDB();
     const idx = db.transactions.pending.findIndex(t => t.id === depositId && t.status === 'pending');
-
     if (idx === -1) {
         return res.json({ success: false, message: 'Giao dịch không tồn tại.' });
     }
-
     const t = db.transactions.pending[idx];
     const user = db.users[t.user];
-
     if (!user) {
         return res.json({ success: false, message: 'User không tồn tại.' });
     }
-
     user.balance = (user.balance || 0) + t.amount;
     db.users[t.user] = user;
-
     db.transactions.all.push({
         user: t.user,
         type: 'deposit',
@@ -427,10 +358,8 @@ app.post('/api/admin/approve-deposit', (req, res) => {
         time: t.time,
         status: 'approved'
     });
-
     db.transactions.pending.splice(idx, 1);
     writeDB(db);
-
     res.json({
         success: true,
         message: `Đã duyệt nạp ${t.amount} VNĐ cho ${t.user}.`
@@ -439,20 +368,15 @@ app.post('/api/admin/approve-deposit', (req, res) => {
 
 app.post('/api/admin/reject-deposit', (req, res) => {
     const { adminUser, depositId } = req.body;
-
     if (adminUser !== 'lichcuto') {
         return res.json({ success: false, message: 'Không có quyền.' });
     }
-
     const db = readDB();
     const idx = db.transactions.pending.findIndex(t => t.id === depositId && t.status === 'pending');
-
     if (idx === -1) {
         return res.json({ success: false, message: 'Giao dịch không tồn tại.' });
     }
-
     const t = db.transactions.pending[idx];
-
     db.transactions.all.push({
         user: t.user,
         type: 'deposit',
@@ -461,10 +385,8 @@ app.post('/api/admin/reject-deposit', (req, res) => {
         time: t.time,
         status: 'rejected'
     });
-
     db.transactions.pending.splice(idx, 1);
     writeDB(db);
-
     res.json({
         success: true,
         message: `Đã từ chối nạp của ${t.user}.`
@@ -474,12 +396,10 @@ app.post('/api/admin/reject-deposit', (req, res) => {
 app.post('/api/user-data', (req, res) => {
     const { username } = req.body;
     const db = readDB();
-
     if (username === 'lichcuto') {
         const pending = db.transactions.pending.filter(t => t.status === 'pending');
         const keys = db.users['lichcuto']?.keys || [];
         const history = db.transactions.all.filter(t => t.user === 'lichcuto' || t.type === 'deposit');
-
         return res.json({
             success: true,
             isAdmin: true,
@@ -489,14 +409,11 @@ app.post('/api/user-data', (req, res) => {
             history: history
         });
     }
-
     const user = db.users[username];
     if (!user) {
         return res.json({ success: false, message: 'User không tồn tại.' });
     }
-
     const history = db.transactions.all.filter(t => t.user === username);
-
     res.json({
         success: true,
         isAdmin: false,
@@ -511,9 +428,9 @@ app.get('/api/admin/pending', (req, res) => {
     res.json({ pending: db.transactions.pending.filter(t => t.status === 'pending') });
 });
 
+// ========== VERIFY KEY (cho Tampermonkey) ==========
 app.post('/api/verify-key', (req, res) => {
     const { key } = req.body;
-
     if (!key) {
         return res.json({ success: false, message: 'Vui lòng nhập Key.' });
     }
@@ -521,7 +438,7 @@ app.post('/api/verify-key', (req, res) => {
     const db = readDB();
     let foundKey = null;
     let foundUser = null;
-
+    
     for (const [username, user] of Object.entries(db.users)) {
         if (user.keys) {
             const k = user.keys.find(k => k.key === key);
@@ -550,6 +467,7 @@ app.post('/api/verify-key', (req, res) => {
     }
 
     try {
+        // Đọc nội dung script thật từ file script.js
         const scriptContent = fs.readFileSync(path.join(__dirname, 'script.js'), 'utf8');
         res.json({
             success: true,
@@ -560,17 +478,11 @@ app.post('/api/verify-key', (req, res) => {
             expiry: foundKey.expiry
         });
     } catch (err) {
-        console.error('Lỗi đọc script.js:', err);
         res.json({ success: false, message: 'Lỗi tải script.' });
     }
 });
 
-// Bắt tất cả các route còn lại để trả về index.html
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Khởi động server
+// ========== START SERVER ==========
 app.listen(PORT, () => {
     console.log(`🚀 Server chạy tại: https://evokey-server.onrender.com`);
     console.log(`🔑 Admin: lichcuto / tinkm2009`);
