@@ -1,11 +1,19 @@
 // ==UserScript==
-// @name         EvoWars.io Auto Chém v5 (Hoàn thiện tối đa)
+// @name         EvoWars Hack - Lich's Script
+// @namespace    http://tampermonkey.net/
+// @version      1.0.0
+// @description  Script VIP được kích hoạt bằng Key
+// @author       lichsitink
 // @match        https://evowars.io/*
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @run-at       document-end
+// @grant        none
 // ==/UserScript==
 
+(function() {
+    'use strict';
+    console.log('[EvoKey] Script hack đã được kích hoạt!');
+    alert('🎉 Chúc mừng! Bạn đã kích hoạt thành công script VIP!');
+    // Thêm code hack của bạn vào đây
+})();
 (function() {
     'use strict';
 
